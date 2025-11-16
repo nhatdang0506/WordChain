@@ -1,7 +1,7 @@
 
 using System.Globalization;
 using System.Text;
-
+//test123
 namespace WordChain.Common;
 
 public static class WordRules
