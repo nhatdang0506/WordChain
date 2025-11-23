@@ -21,11 +21,13 @@ public class GameServer
     private readonly HashSet<string> _used = new();
     private int _turnIndex = -1;
     private DateTime _deadlineUtc = DateTime.UtcNow;
-    private bool _gameActive = false; // only true after Start
+    private bool _gameActive = false;
 
     private readonly HashSet<string> _dict;
     private Thread? _timerThread;
 
+    // Khởi tạo server game WordChain:
+    // - Tạo socket listener bind tới IP + port.
     public GameServer(IPAddress bindAddress, int port, string dictionaryPath)
     {
         _listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -36,6 +38,9 @@ public class GameServer
         Console.WriteLine($"Loaded dictionary entries: {_dict.Count}");
     }
 
+    // Đọc file từ điển từ đường dẫn cho trước,
+    // Normalize từng dòng và lưu vào HashSet _dict.
+    // HashSet này dùng để kiểm tra 1 từ/cụm từ có tồn tại trong từ điển hay không
     private static HashSet<string> LoadDictionary(string path)
     {
         var hs = new HashSet<string>(StringComparer.Ordinal);
@@ -55,6 +60,10 @@ public class GameServer
         return hs;
     }
 
+    // Bắt đầu chạy server:
+    // - Đặt _running = true.
+    // - Tạo thread AcceptLoop để chấp nhận client mới.
+    // - Tạo thread TimerLoop để xử lý hết giờ lượt chơi.
     public void Start()
     {
         _running = true;
@@ -64,6 +73,12 @@ public class GameServer
         _timerThread.Start();
     }
 
+
+    // Dừng server:
+    // - Đặt _running = false.
+    // - Đóng socket listener.
+    // - Join thread timer, đóng tất cả ClientSession.
+    // - Reset lại trạng thái game.
     public void Stop()
     {
         _running = false;
@@ -80,6 +95,10 @@ public class GameServer
         }
     }
 
+    // Vòng lặp nhận kết nối client mới:
+    // - Gọi _listener.Accept() để nhận socket mới.
+    // - Tạo ClientSession cho mỗi client.
+    // - Lưu vào danh sách _clients và tạo thread riêng chạy session.Run().
     private void AcceptLoop()
     {
         while (_running)
@@ -102,7 +121,9 @@ public class GameServer
             catch (ObjectDisposedException) { }
         }
     }
-
+    // Vòng lặp timer toàn cục:
+    // - Mỗi ~200ms kiểm tra người đang tới lượt và deadline (_deadlineUtc).
+    // - Nếu quá thời gian thì gọi HandleTimeout(client hiện tại).
     private void TimerLoop()
     {
         while (_running)
@@ -137,6 +158,15 @@ public class GameServer
         }
     }
 
+    // Xử lý khi 1 người chơi hết giờ lượt:
+    // - Xác nhận cur đúng là người đang tới lượt.
+    // - Trừ Lives, nếu về 0 thì đánh dấu Alive = false (bị loại).
+    // - Reset chuỗi nối (_lastWord, _used).
+    // - Chuyển lượt sang người Alive tiếp theo nếu còn.
+    // - Kiểm tra số người còn Alive:
+    //   + 0 → tất cả thua, gửi GameEndMessage và ResetGame.
+    //   + 1 → người đó thắng, gửi GameEndMessage và ResetGame.
+    //   + >1 → tiếp tục ván, Broadcast GameState mới.
     private void HandleTimeout(ClientSession cur)
     {
         ClientSession? next = null;
@@ -155,109 +185,121 @@ public class GameServer
             var curName = cur.PlayerName ?? "?";
 
             if (eliminated)
-         {
-         cur.Alive = false; // Đánh dấu người chơi đã bị loại
-          timeoutMsg = $"⏰ Hết giờ! {curName} mất 1 mạng và đã bị loại.";
-   }
+            {
+                cur.Alive = false; // Đánh dấu người chơi đã bị loại
+                timeoutMsg = $"⏰ Hết giờ! {curName} mất 1 mạng và đã bị loại.";
+            }
             else
-            timeoutMsg = $"⏰ Hết giờ! {curName} mất 1 mạng.";
+                timeoutMsg = $"⏰ Hết giờ! {curName} mất 1 mạng.";
 
             if (eliminated)
- {
+            {
                 int safety = _clients.Count + 1;
-       int ix = _turnIndex;
-   do
-  {
- ix = (ix + 1) % _clients.Count;
-   if (_clients[ix].Alive) { _turnIndex = ix; next = _clients[_turnIndex]; break; }
-       } while (--safety > 0);
+                int ix = _turnIndex;
+                do
+                {
+                    ix = (ix + 1) % _clients.Count;
+                    if (_clients[ix].Alive) { _turnIndex = ix; next = _clients[_turnIndex]; break; }
+                } while (--safety > 0);
 
-           if (next == null) { _turnIndex = -1; _gameActive = false; }
-   }
+                if (next == null) { _turnIndex = -1; _gameActive = false; }
+            }
             else
             {
-      _turnIndex = (_turnIndex + 1) % _clients.Count;
-       int safety = _clients.Count + 1;
-     while (safety-- > 0 && !_clients[_turnIndex].Alive)
-    _turnIndex = (_turnIndex + 1) % _clients.Count;
+                _turnIndex = (_turnIndex + 1) % _clients.Count;
+                int safety = _clients.Count + 1;
+                while (safety-- > 0 && !_clients[_turnIndex].Alive)
+                    _turnIndex = (_turnIndex + 1) % _clients.Count;
                 next = _clients[_turnIndex];
-         }
+            }
 
-    _deadlineUtc = DateTime.UtcNow.AddSeconds(TurnLimitSeconds);
-       // rs chữ sau khi m
-     _lastWord = null;
+            _deadlineUtc = DateTime.UtcNow.AddSeconds(TurnLimitSeconds);
+            // rs chữ sau khi mất mạng
+            _lastWord = null;
             _used.Clear();
- }
+        }
 
-     Broadcast(new InfoMessage { Message = timeoutMsg + " 🔄 Reset chuỗi." + (next != null ? $" ⟳ Qua lượt: {next.PlayerName}" : "") });
-      if (eliminated)
+        Broadcast(new InfoMessage { Message = timeoutMsg + " 🔄 Reset chuỗi." + (next != null ? $" ⟳ Qua lượt: {next.PlayerName}" : "") });
+        if (eliminated)
         {
- Broadcast(new InfoMessage { Message = $"☠️ {cur.PlayerName} bị loại khỏi ván." });
+            Broadcast(new InfoMessage { Message = $"☠️ {cur.PlayerName} bị loại khỏi ván." });
         }
 
         // Kiểm tra điều kiện thắng/thua
         string? winner = null;
-      lock (_lock)
+        lock (_lock)
         {
-       var alive = _clients.Where(c => c.Alive).ToList();
-            if (alive.Count == 1) 
-        winner = alive[0].PlayerName;
-     else if (alive.Count == 0)
-  {
-      // Không còn ai sống -> hòa
-           Broadcast(new InfoMessage { Message = $"🏳️ Ván kết thúc! Tất cả đều thua. ⏹️ Chờ Start/Reset để chơi lại." });
-       ResetGame(keepLives:false, startTimer:false);
-       return;
+            var alive = _clients.Where(c => c.Alive).ToList();
+            if (alive.Count == 1)
+                winner = alive[0].PlayerName;
+            else if (alive.Count == 0)
+            {
+                // Không còn ai sống -> hòa
+                Broadcast(new InfoMessage { Message = $"🏳️ Ván kết thúc! Tất cả đều thua. ⏹️ Chờ Start/Reset để chơi lại." });
+                ResetGame(keepLives: false, startTimer: false);
+                return;
             }
         }
- 
+
         if (winner != null)
-     {
+        {
             Broadcast(new GameEndMessage { Winner = winner, Message = $"🏆 Ván kết thúc! Chiến thắng: {winner}" });
-            ResetGame(keepLives:false, startTimer:false);
+            ResetGame(keepLives: false, startTimer: false);
             return;
         }
 
         BroadcastState();
-  }
+    }
 
+    // Gọi khi 1 client ngắt kết nối:
+    // - Xóa khỏi danh sách _clients.
+    // - Điều chỉnh _turnIndex, _gameActive nếu cần.
+    // - Nếu đang trong ván và sau khi rời chỉ còn 1 người Alive → người đó thắng,
+    //   gửi GameEndMessage và ResetGame.
+    // - Ngược lại, broadcast Info + Players + GameState để cập nhật cho người còn lại.
     internal void OnClientDisconnected(ClientSession s)
     {
-    string? winner = null;
+        string? winner = null;
         lock (_lock)
-  {
-     var ix = _clients.IndexOf(s);
+        {
+            var ix = _clients.IndexOf(s);
             if (ix >= 0) _clients.RemoveAt(ix);
-         if (_clients.Count == 0) { _turnIndex = -1; _gameActive = false; }
+            if (_clients.Count == 0) { _turnIndex = -1; _gameActive = false; }
             else if (_turnIndex >= _clients.Count) _turnIndex = 0;
 
             // Kiểm tra nếu game đang active và chỉ còn 1 người sống
-          if (_gameActive)
-      {
-   var alive = _clients.Where(c => c.Alive).ToList();
- if (alive.Count == 1)
-   winner = alive[0].PlayerName;
-         }
-        }
-        
-        if (!string.IsNullOrWhiteSpace(s.PlayerName))
-    {
-            Broadcast(new InfoMessage { Message = $"⚪ {s.PlayerName} rời trò chơi." });
-            
-   if (winner != null)
+            if (_gameActive)
             {
-     Broadcast(new GameEndMessage { Winner = winner, Message = $"🏆 {winner} chiến thắng do đối thủ rời game!" });
-              ResetGame(keepLives: false, startTimer: false);
+                var alive = _clients.Where(c => c.Alive).ToList();
+                if (alive.Count == 1)
+                    winner = alive[0].PlayerName;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.PlayerName))
+        {
+            Broadcast(new InfoMessage { Message = $"⚪ {s.PlayerName} rời trò chơi." });
+
+            if (winner != null)
+            {
+                Broadcast(new GameEndMessage { Winner = winner, Message = $"🏆 {winner} chiến thắng do đối thủ rời game!" });
+                ResetGame(keepLives: false, startTimer: false);
             }
             else
-   {
-       BroadcastPlayers();
-        BroadcastState();
-         }
+            {
+                BroadcastPlayers();
+                BroadcastState();
+            }
         }
-     Console.WriteLine($"Client disconnected: {s.RemoteEndPoint}");
+        Console.WriteLine($"Client disconnected: {s.RemoteEndPoint}");
     }
 
+    // Xử lý 1 dòng JSON nhận từ client:
+    // - Dùng MessageSerializer.PeekType để xác định loại message.
+    // - Deserialize vào message tương ứng (Join, SubmitWord, Start).
+    // - Gọi handler tương ứng: HandleJoin, HandleSubmitWord, ResetGame.
+    // - Nếu type không hỗ trợ → gửi ErrorMessage.
+    // - Bắt exception parse và trả về ErrorMessage "Invalid message".
     internal void HandleLine(ClientSession s, string jsonLine)
     {
         var type = MessageSerializer.PeekType(jsonLine);
@@ -268,7 +310,7 @@ public class GameServer
                 case MessageTypes.Join: HandleJoin(s, MessageSerializer.Deserialize<JoinMessage>(jsonLine)); break;
                 case MessageTypes.SubmitWord: HandleSubmitWord(s, MessageSerializer.Deserialize<SubmitWordMessage>(jsonLine)); break;
                 case MessageTypes.Start:
-                    ResetGame(keepLives:false, startTimer:true);
+                    ResetGame(keepLives: false, startTimer: true);
                     Broadcast(new InfoMessage { Message = $"🏁 Bắt đầu ván! Người đi đầu tiên: {GetTurnName()}" });
                     BroadcastState();
                     break;
@@ -284,6 +326,11 @@ public class GameServer
         }
     }
 
+    // Xử lý client yêu cầu Join:
+    // - Tạo tên player, tránh trùng (thêm số đuôi nếu cần).
+    // - Gán Lives mặc định, Alive = true.
+    // - Gửi JoinedMessage (OK + AssignedName + danh sách players) về cho chính client.
+    // - Broadcast Info "X đã tham gia", Players và GameState cho các client khác.
     private void HandleJoin(ClientSession s, JoinMessage msg)
     {
         string baseName = string.IsNullOrWhiteSpace(msg.Name) ? "Player" : msg.Name.Trim();
@@ -296,7 +343,7 @@ public class GameServer
             s.PlayerName = finalName;
             s.Lives = InitialLives;
             s.Alive = true;
-            if (!_gameActive && _turnIndex == -1) _turnIndex = 0; // set for display only; timer still off
+            if (!_gameActive && _turnIndex == -1) _turnIndex = 0;
         }
         s.Send(new JoinedMessage { Ok = true, Message = $"🟢 Chào {finalName}!", AssignedName = finalName, Players = GetPlayerNames() });
         BroadcastExcept(new InfoMessage { Message = $"🟢 {finalName} đã tham gia." }, s);
@@ -304,6 +351,18 @@ public class GameServer
         BroadcastState();
     }
 
+    // Xử lý khi 1 client gửi từ/câu:
+    // 1) Kiểm tra đã Join chưa, game đã Active chưa, có đúng lượt hay không.
+    // 2) Gọi WordRules.IsValidChainByWord(_lastWord, msg.Word, out nextReq) để kiểm tra luật nối.
+    // 3) Normalize từ, kiểm tra trùng trong _used.
+    // 4) Nếu _dict có dữ liệu → kiểm tra từ có trong từ điển hay không.
+    // 5) Nếu KHÔNG hợp lệ:
+    //    - Gửi WordResultMessage { Ok=false } cho client đó (giữ nguyên lượt và timer).
+    // 6) Nếu HỢP LỆ:
+    //    - Cập nhật _lastWord, thêm vào _used.
+    //    - Chuyển lượt sang người Alive tiếp theo.
+    //    - Reset _deadlineUtc (thời gian lượt mới).
+    //    - Broadcast WordResultMessage { Ok=true } và GameState cho tất cả client.
     private void HandleSubmitWord(ClientSession s, SubmitWordMessage msg)
     {
         if (string.IsNullOrWhiteSpace(s.PlayerName)) { s.Send(new ErrorMessage { Message = "Bạn chưa tham gia." }); return; }
@@ -327,7 +386,8 @@ public class GameServer
 
             if (ok && _dict.Count > 0 && !_dict.Contains(normalized))
             {
-                s.Send(new WordResultMessage {
+                s.Send(new WordResultMessage
+                {
                     Ok = false,
                     Message = "⚠️ Cụm từ không có trong từ điển.",
                     Player = s.PlayerName!,
@@ -341,7 +401,8 @@ public class GameServer
 
             if (!ok)
             {
-                s.Send(new WordResultMessage {
+                s.Send(new WordResultMessage
+                {
                     Ok = false,
                     Message = "⚠️ Không hợp lệ theo luật nối TỪ CUỐI hoặc đã dùng.",
                     Player = s.PlayerName!,
@@ -363,7 +424,8 @@ public class GameServer
             var nextTurn = _clients[_turnIndex];
             _deadlineUtc = DateTime.UtcNow.AddSeconds(TurnLimitSeconds);
 
-            Broadcast(new WordResultMessage {
+            Broadcast(new WordResultMessage
+            {
                 Ok = true,
                 Message = "✅ Hợp lệ.",
                 Player = s.PlayerName!,
@@ -375,7 +437,14 @@ public class GameServer
         }
         BroadcastState();
     }
-
+    // Reset trạng thái ván chơi hiện tại:
+    // - Xóa _lastWord và danh sách _used.
+    // - Nếu keepLives == false: reset Lives + Alive cho mọi client.
+    // - Nếu startTimer == true và còn người Alive:
+    //    + Chọn người Alive đầu tiên làm lượt đầu.
+    //    + Đặt _deadlineUtc = Now + TurnLimitSeconds, _gameActive = true.
+    // - Ngược lại: tắt gameActive, _turnIndex = -1, deadline rất xa.
+    // - Gửi Info "Reset ván" và broadcast GameState mới.
     private void ResetGame(bool keepLives, bool startTimer)
     {
         lock (_lock)
@@ -405,11 +474,13 @@ public class GameServer
         BroadcastState();
     }
 
+    // Lấy danh sách tên PlayerName của tất cả client đã đặt tên (không rỗng).
     private List<string> GetPlayerNames()
     {
         lock (_lock) return _clients.Where(c => !string.IsNullOrWhiteSpace(c.PlayerName)).Select(c => c.PlayerName!).ToList();
     }
 
+    // Lấy tên player đang tới lượt dựa trên _turnIndex.
     private string GetTurnName()
     {
         lock (_lock)
@@ -419,11 +490,12 @@ public class GameServer
         }
     }
 
-    private Dictionary<string,int> GetLives()
+    // Trả về Dictionary<playerName, lives> cho tất cả client có PlayerName hợp lệ.
+    private Dictionary<string, int> GetLives()
     {
         lock (_lock)
         {
-            var d = new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
+            var d = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var c in _clients)
             {
                 if (!string.IsNullOrWhiteSpace(c.PlayerName))
@@ -432,6 +504,7 @@ public class GameServer
             return d;
         }
     }
+    // Tính số giây còn lại của lượt hiện tại (deadline - Now).
 
     private int GetRemainingSeconds()
     {
@@ -442,8 +515,14 @@ public class GameServer
         }
     }
 
+    // Gửi PlayersMessage (danh sách tên player) tới TẤT CẢ client.
     private void BroadcastPlayers() => Broadcast(new PlayersMessage { Players = GetPlayerNames() });
 
+    // Gửi GameStateMessage tới tất cả client, bao gồm:
+    // - LastWord, NextRequired (từ cần nối tiếp).
+    // - Tên người tới lượt.
+    // - Danh sách players, usedWords, lives.
+    // - Số giây còn lại của lượt.
     private void BroadcastState()
     {
         string turn = "";
@@ -453,17 +532,19 @@ public class GameServer
             if (_clients.Count > 0 && _turnIndex >= 0 && _turnIndex < _clients.Count) turn = _clients[_turnIndex].PlayerName ?? "";
             if (!string.IsNullOrWhiteSpace(_lastWord)) nextReq = WordRules.LastWordNormalized(_lastWord);
         }
-        Broadcast(new GameStateMessage { 
-            LastWord = _lastWord, 
-            NextRequired = nextReq, 
-            Turn = turn, 
-            Players = GetPlayerNames(), 
+        Broadcast(new GameStateMessage
+        {
+            LastWord = _lastWord,
+            NextRequired = nextReq,
+            Turn = turn,
+            Players = GetPlayerNames(),
             UsedWords = new HashSet<string>(_used),
             Lives = GetLives(),
             TurnRemainingSeconds = GetRemainingSeconds()
         });
     }
 
+    // Serialize msg thành JSON + '\n' rồi gửi tới TẤT CẢ ClientSession trong _clients.
     internal void Broadcast<T>(T msg)
     {
         var json = MessageSerializer.Serialize(msg) + "\n";
@@ -472,11 +553,12 @@ public class GameServer
         {
             foreach (var c in _clients.ToList())
             {
-                try { c.SendRaw(data); } catch {}
+                try { c.SendRaw(data); } catch { }
             }
         }
     }
 
+    // Tương tự Broadcast, nhưng bỏ qua 1 client (thường là người gửi).
     internal void BroadcastExcept<T>(T msg, ClientSession except)
     {
         var json = MessageSerializer.Serialize(msg) + "\n";
@@ -486,7 +568,7 @@ public class GameServer
             foreach (var c in _clients.ToList())
             {
                 if (object.ReferenceEquals(c, except)) continue;
-                try { c.SendRaw(data); } catch {}
+                try { c.SendRaw(data); } catch { }
             }
         }
     }
@@ -504,82 +586,97 @@ public class ClientSession
     private readonly string _remoteEndPoint;
 
     public string? PlayerName { get; set; }
-public int Lives { get; set; } = GameServer.InitialLives;
- public bool Alive { get; set; } = true;
+    public int Lives { get; set; } = GameServer.InitialLives;
+    public bool Alive { get; set; } = true;
     public string RemoteEndPoint => _remoteEndPoint;
-
-    public ClientSession(Socket socket, GameServer server) 
-    { 
-        _socket = socket; 
+    //khoi tao
+    public ClientSession(Socket socket, GameServer server)
+    {
+        _socket = socket;
         _server = server;
         _remoteEndPoint = socket.RemoteEndPoint?.ToString() ?? "Unknown";
     }
 
+    // Vòng lặp chính cho 1 client:
+    // - Liên tục gọi ReadLine() để đọc từng message JSON (theo '\n') từ socket.
+    // - Với mỗi dòng đọc được, gọi _server.HandleLine(this, line).
+    // - Khi socket đóng hoặc lỗi → thoát và báo OnClientDisconnected cho GameServer.
     public void Run()
     {
         try
         {
- while (_running)
-   {
-  var line = ReadLine();
- if (line == null) break;
+            while (_running)
+            {
+                var line = ReadLine();
+                if (line == null) break;
                 _server.HandleLine(this, line);
- }
-    }
-    catch (Exception ex) { Console.WriteLine("Client loop error: " + ex.Message); }
+            }
+        }
+        catch (Exception ex) { Console.WriteLine("Client loop error: " + ex.Message); }
         finally { Close(); _server.OnClientDisconnected(this); }
     }
-
+    // Đọc dữ liệu từ socket theo dạng text line-based:
+    // - Ghép byte nhận được vào _sb (StringBuilder).
+    // - Khi tìm thấy ký tự '\n' thì cắt ra 1 dòng, trim '\r' và trả về.
+    // - Nếu socket đóng/lỗi → trả về null.
+    // Dùng để bóc tách từng JSON message mà client gửi lên.
     private string? ReadLine()
     {
-      while (_running)
+        while (_running)
         {
-  for (int i = 0; i < _sb.Length; i++)
+            for (int i = 0; i < _sb.Length; i++)
             {
-             if (_sb[i] == '\n')
-            {
-   var s = _sb.ToString(0, i).TrimEnd('\r');
-           _sb.Remove(0, i + 1);
-     return s;
-        }
+                if (_sb[i] == '\n')
+                {
+                    var s = _sb.ToString(0, i).TrimEnd('\r');
+                    _sb.Remove(0, i + 1);
+                    return s;
+                }
             }
-     int read;
+            int read;
             try { read = _socket.Receive(_buf); } catch { return null; }
-   if (read <= 0) return null;
-  _sb.Append(Encoding.UTF8.GetString(_buf, 0, read));
+            if (read <= 0) return null;
+            _sb.Append(Encoding.UTF8.GetString(_buf, 0, read));
         }
-    return null;
+        return null;
     }
-
+    // Serialize một message C# thành JSON + '\n và gọi SendRaw để gửi dưới dạng byte UTF-8 tới client tương ứng.
     public void Send<T>(T message) => SendRaw(Encoding.UTF8.GetBytes(MessageSerializer.Serialize(message) + "\n"));
 
+    // Gửi mảng byte data qua socket của client này:
+    // - Dùng lock(_sendLock) để đảm bảo chỉ 1 thread gửi tại một thời điểm.
+    // - Vòng while đảm bảo gửi hết toàn bộ data (phòng trường hợp Send gửi thiếu).
+    // - Bắt và bỏ qua ObjectDisposedException/SocketException khi client đã ngắt.
     public void SendRaw(byte[] data)
-  {
+    {
         if (_disposed) return;
-      
+
         lock (_sendLock)
         {
-          try
-     {
-         if (_disposed || !_socket.Connected) return;
-                
-int sent = 0;
-       while (sent < data.Length)
-           sent += _socket.Send(data, sent, data.Length - sent, SocketFlags.None);
+            try
+            {
+                if (_disposed || !_socket.Connected) return;
+
+                int sent = 0;
+                while (sent < data.Length)
+                    sent += _socket.Send(data, sent, data.Length - sent, SocketFlags.None);
             }
-catch (ObjectDisposedException) { }
+            catch (ObjectDisposedException) { }
             catch (SocketException) { }
         }
     }
-
+    // Đóng kết nối của client:
+    // - Đặt cờ _running = false, _disposed = true.
+    // - Gọi Shutdown(Both) và Close() trên socket.
+    // - Được gọi khi client disconnect hoặc server dừng.
     public void Close()
     {
-      if (_disposed) return;
-    
+        if (_disposed) return;
+
         _running = false;
         _disposed = true;
-        
- try { _socket.Shutdown(SocketShutdown.Both); } catch { }
+
+        try { _socket.Shutdown(SocketShutdown.Both); } catch { }
         try { _socket.Close(); } catch { }
     }
 }

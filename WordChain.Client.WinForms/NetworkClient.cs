@@ -20,6 +20,7 @@ public class NetworkClient : IDisposable
     public event Action<string>? Error;
     public bool Connected => _socket != null;
 
+    //kết nối tới server
     public void Connect(string host, int port)
     {
         if (_socket != null) throw new InvalidOperationException("Đã kết nối.");
@@ -33,7 +34,7 @@ public class NetworkClient : IDisposable
 
         Info?.Invoke($"⚪ Đã kết nối {host}:{port}.");
     }
-
+    // Ngắt kết nối với server:
     public void Disconnect()
     {
         _running = false;
@@ -46,7 +47,7 @@ public class NetworkClient : IDisposable
         try { _recvThread?.Join(100); } catch { }
         Info?.Invoke("⚪ Đã ngắt kết nối.");
     }
-
+    // Gửi một message C# lên server: Serialize thành JSON + '\n'.
     public void Send<T>(T message)
     {
         if (_socket == null) throw new InvalidOperationException("Chưa kết nối.");
@@ -56,7 +57,7 @@ public class NetworkClient : IDisposable
         while (sent < data.Length)
             sent += _socket.Send(data, sent, data.Length - sent, SocketFlags.None);
     }
-
+    // Vòng lặp nhận dữ liệu từ server:
     private void RecvLoop()
     {
         try

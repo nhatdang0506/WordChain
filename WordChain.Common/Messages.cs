@@ -1,7 +1,8 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 
 namespace WordChain.Common.Messaging;
 
+// Tập hợp các hằng "type" dùng trong JSON message
 public static class MessageTypes
 {
     public const string Join = "Join";
@@ -50,6 +51,9 @@ public record class PlayersMessage { public string Type { get; init; } = Message
 public record class GameEndMessage { public string Type { get; init; } = MessageTypes.GameEnd; public string Winner { get; init; } = ""; public string Message { get; init; } = ""; }
 #endregion
 
+//peektype
+// Đọc nhanh chuỗi JSON và trả về giá trị trường "type" mà không cần deserialize full object.
+// Dùng để switch-case chọn đúng kiểu message (Join, SubmitWord, GameState, ...).
 public static class MessageSerializer
 {
     private static readonly JsonSerializerOptions _opts = new(JsonSerializerDefaults.Web);

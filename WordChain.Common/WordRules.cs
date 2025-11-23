@@ -1,11 +1,12 @@
-
+﻿
 using System.Globalization;
 using System.Text;
-//test123
+
 namespace WordChain.Common;
 
 public static class WordRules
 {
+    // Chuẩn hóa chuỗi đầu vào: cắt khoảng trắng, chuyển về chữ thường,
     public static string Normalize(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return "";
@@ -21,6 +22,7 @@ public static class WordRules
         return sb.ToString().Normalize(NormalizationForm.FormC);
     }
 
+    // Lấy "từ cuối" của một câu sau khi đã Normalize.
     public static string? LastWordNormalized(string phrase)
     {
         var s = Normalize(phrase);
@@ -34,6 +36,8 @@ public static class WordRules
         return null;
     }
 
+    // Lọc 1 token, chỉ giữ lại chữ, số, '-' và '_'.
+    // Dùng bên trong LastWordNormalized để loại bỏ các ký tự linh tinh khỏi từ cuối.
     private static string FilterLettersDigitDash(string token)
     {
         var sb = new StringBuilder(token.Length);
@@ -44,6 +48,7 @@ public static class WordRules
         return sb.ToString();
     }
 
+    // Kiểm tra xem câu hiện tại (sau Normalize) có BẮT ĐẦU bằng từ "required" hay không.
     public static bool StartsWithWordNormalized(string current, string required)
     {
         var s = Normalize(current);
@@ -54,7 +59,7 @@ public static class WordRules
         if (s.StartsWith(required + "_")) return true;
         return false;
     }
-
+    // Hàm kiểm tra 1 lượt nối chữ có hợp lệ hay không.
     public static bool IsValidChainByWord(string? previous, string current, out string? nextRequired)
     {
         nextRequired = LastWordNormalized(current);
