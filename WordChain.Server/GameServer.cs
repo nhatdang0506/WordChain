@@ -39,8 +39,6 @@ public class GameServer
     }
 
     // Đọc file từ điển từ đường dẫn cho trước,
-    // Normalize từng dòng và lưu vào HashSet _dict.
-    // HashSet này dùng để kiểm tra 1 từ/cụm từ có tồn tại trong từ điển hay không
     private static HashSet<string> LoadDictionary(string path)
     {
         var hs = new HashSet<string>(StringComparer.Ordinal);
@@ -61,9 +59,7 @@ public class GameServer
     }
 
     // Bắt đầu chạy server:
-    // - Đặt _running = true.
-    // - Tạo thread AcceptLoop để chấp nhận client mới.
-    // - Tạo thread TimerLoop để xử lý hết giờ lượt chơi.
+
     public void Start()
     {
         _running = true;
@@ -75,10 +71,6 @@ public class GameServer
 
 
     // Dừng server:
-    // - Đặt _running = false.
-    // - Đóng socket listener.
-    // - Join thread timer, đóng tất cả ClientSession.
-    // - Reset lại trạng thái game.
     public void Stop()
     {
         _running = false;
@@ -96,9 +88,6 @@ public class GameServer
     }
 
     // Vòng lặp nhận kết nối client mới:
-    // - Gọi _listener.Accept() để nhận socket mới.
-    // - Tạo ClientSession cho mỗi client.
-    // - Lưu vào danh sách _clients và tạo thread riêng chạy session.Run().
     private void AcceptLoop()
     {
         while (_running)
@@ -121,9 +110,7 @@ public class GameServer
             catch (ObjectDisposedException) { }
         }
     }
-    // Vòng lặp timer toàn cục:
-    // - Mỗi ~200ms kiểm tra người đang tới lượt và deadline (_deadlineUtc).
-    // - Nếu quá thời gian thì gọi HandleTimeout(client hiện tại).
+    // Vòng lặp timer toàn cục: kiểm tra 200ms -> quá thì gọi hanletimeout
     private void TimerLoop()
     {
         while (_running)
@@ -159,14 +146,6 @@ public class GameServer
     }
 
     // Xử lý khi 1 người chơi hết giờ lượt:
-    // - Xác nhận cur đúng là người đang tới lượt.
-    // - Trừ Lives, nếu về 0 thì đánh dấu Alive = false (bị loại).
-    // - Reset chuỗi nối (_lastWord, _used).
-    // - Chuyển lượt sang người Alive tiếp theo nếu còn.
-    // - Kiểm tra số người còn Alive:
-    //   + 0 → tất cả thua, gửi GameEndMessage và ResetGame.
-    //   + 1 → người đó thắng, gửi GameEndMessage và ResetGame.
-    //   + >1 → tiếp tục ván, Broadcast GameState mới.
     private void HandleTimeout(ClientSession cur)
     {
         ClientSession? next = null;
@@ -252,11 +231,6 @@ public class GameServer
     }
 
     // Gọi khi 1 client ngắt kết nối:
-    // - Xóa khỏi danh sách _clients.
-    // - Điều chỉnh _turnIndex, _gameActive nếu cần.
-    // - Nếu đang trong ván và sau khi rời chỉ còn 1 người Alive → người đó thắng,
-    //   gửi GameEndMessage và ResetGame.
-    // - Ngược lại, broadcast Info + Players + GameState để cập nhật cho người còn lại.
     internal void OnClientDisconnected(ClientSession s)
     {
         string? winner = null;
@@ -295,11 +269,7 @@ public class GameServer
     }
 
     // Xử lý 1 dòng JSON nhận từ client:
-    // - Dùng MessageSerializer.PeekType để xác định loại message.
-    // - Deserialize vào message tương ứng (Join, SubmitWord, Start).
-    // - Gọi handler tương ứng: HandleJoin, HandleSubmitWord, ResetGame.
-    // - Nếu type không hỗ trợ → gửi ErrorMessage.
-    // - Bắt exception parse và trả về ErrorMessage "Invalid message".
+
     internal void HandleLine(ClientSession s, string jsonLine)
     {
         var type = MessageSerializer.PeekType(jsonLine);
@@ -327,10 +297,6 @@ public class GameServer
     }
 
     // Xử lý client yêu cầu Join:
-    // - Tạo tên player, tránh trùng (thêm số đuôi nếu cần).
-    // - Gán Lives mặc định, Alive = true.
-    // - Gửi JoinedMessage (OK + AssignedName + danh sách players) về cho chính client.
-    // - Broadcast Info "X đã tham gia", Players và GameState cho các client khác.
     private void HandleJoin(ClientSession s, JoinMessage msg)
     {
         string baseName = string.IsNullOrWhiteSpace(msg.Name) ? "Player" : msg.Name.Trim();
@@ -352,21 +318,11 @@ public class GameServer
     }
 
     // Xử lý khi 1 client gửi từ/câu:
-    // 1) Kiểm tra đã Join chưa, game đã Active chưa, có đúng lượt hay không.
-    // 2) Gọi WordRules.IsValidChainByWord(_lastWord, msg.Word, out nextReq) để kiểm tra luật nối.
-    // 3) Normalize từ, kiểm tra trùng trong _used.
-    // 4) Nếu _dict có dữ liệu → kiểm tra từ có trong từ điển hay không.
-    // 5) Nếu KHÔNG hợp lệ:
-    //    - Gửi WordResultMessage { Ok=false } cho client đó (giữ nguyên lượt và timer).
-    // 6) Nếu HỢP LỆ:
-    //    - Cập nhật _lastWord, thêm vào _used.
-    //    - Chuyển lượt sang người Alive tiếp theo.
-    //    - Reset _deadlineUtc (thời gian lượt mới).
-    //    - Broadcast WordResultMessage { Ok=true } và GameState cho tất cả client.
+
     private void HandleSubmitWord(ClientSession s, SubmitWordMessage msg)
     {
         if (string.IsNullOrWhiteSpace(s.PlayerName)) { s.Send(new ErrorMessage { Message = "Bạn chưa tham gia." }); return; }
-
+        //kiểm tra join,active,turn
         lock (_lock)
         {
             if (_clients.Count == 0) { s.Send(new ErrorMessage { Message = "Chưa có người chơi." }); return; }
@@ -380,8 +336,10 @@ public class GameServer
             }
 
             string? nextReq;
+            //kiểm tra luật nối từ
             bool ok = WordRules.IsValidChainByWord(_lastWord, msg.Word, out nextReq);
             var normalized = WordRules.Normalize(msg.Word);
+
             if (ok && _used.Contains(normalized)) ok = false;
 
             if (ok && _dict.Count > 0 && !_dict.Contains(normalized))
@@ -413,7 +371,7 @@ public class GameServer
                 });
                 return;
             }
-
+            //update trạng thái khi từ hợp lệ
             _lastWord = msg.Word;
             _used.Add(normalized);
 
@@ -438,13 +396,6 @@ public class GameServer
         BroadcastState();
     }
     // Reset trạng thái ván chơi hiện tại:
-    // - Xóa _lastWord và danh sách _used.
-    // - Nếu keepLives == false: reset Lives + Alive cho mọi client.
-    // - Nếu startTimer == true và còn người Alive:
-    //    + Chọn người Alive đầu tiên làm lượt đầu.
-    //    + Đặt _deadlineUtc = Now + TurnLimitSeconds, _gameActive = true.
-    // - Ngược lại: tắt gameActive, _turnIndex = -1, deadline rất xa.
-    // - Gửi Info "Reset ván" và broadcast GameState mới.
     private void ResetGame(bool keepLives, bool startTimer)
     {
         lock (_lock)
@@ -518,11 +469,7 @@ public class GameServer
     // Gửi PlayersMessage (danh sách tên player) tới TẤT CẢ client.
     private void BroadcastPlayers() => Broadcast(new PlayersMessage { Players = GetPlayerNames() });
 
-    // Gửi GameStateMessage tới tất cả client, bao gồm:
-    // - LastWord, NextRequired (từ cần nối tiếp).
-    // - Tên người tới lượt.
-    // - Danh sách players, usedWords, lives.
-    // - Số giây còn lại của lượt.
+    // Gửi GameStateMessage tới tất cả client, bao gồm: lastword, nextrequired,tên cur, ds players, usedwords, lives, time left.
     private void BroadcastState()
     {
         string turn = "";
@@ -597,10 +544,7 @@ public class ClientSession
         _remoteEndPoint = socket.RemoteEndPoint?.ToString() ?? "Unknown";
     }
 
-    // Vòng lặp chính cho 1 client:
-    // - Liên tục gọi ReadLine() để đọc từng message JSON (theo '\n') từ socket.
-    // - Với mỗi dòng đọc được, gọi _server.HandleLine(this, line).
-    // - Khi socket đóng hoặc lỗi → thoát và báo OnClientDisconnected cho GameServer.
+    // Vòng lặp chính cho 1 client:đọc readline và xử lý
     public void Run()
     {
         try
@@ -615,11 +559,8 @@ public class ClientSession
         catch (Exception ex) { Console.WriteLine("Client loop error: " + ex.Message); }
         finally { Close(); _server.OnClientDisconnected(this); }
     }
-    // Đọc dữ liệu từ socket theo dạng text line-based:
-    // - Ghép byte nhận được vào _sb (StringBuilder).
-    // - Khi tìm thấy ký tự '\n' thì cắt ra 1 dòng, trim '\r' và trả về.
-    // - Nếu socket đóng/lỗi → trả về null.
-    // Dùng để bóc tách từng JSON message mà client gửi lên.
+    // Đọc dữ liệu từ socket theo dạng text line-based:ghép vào sb
+
     private string? ReadLine()
     {
         while (_running)
@@ -644,9 +585,6 @@ public class ClientSession
     public void Send<T>(T message) => SendRaw(Encoding.UTF8.GetBytes(MessageSerializer.Serialize(message) + "\n"));
 
     // Gửi mảng byte data qua socket của client này:
-    // - Dùng lock(_sendLock) để đảm bảo chỉ 1 thread gửi tại một thời điểm.
-    // - Vòng while đảm bảo gửi hết toàn bộ data (phòng trường hợp Send gửi thiếu).
-    // - Bắt và bỏ qua ObjectDisposedException/SocketException khi client đã ngắt.
     public void SendRaw(byte[] data)
     {
         if (_disposed) return;
@@ -666,9 +604,7 @@ public class ClientSession
         }
     }
     // Đóng kết nối của client:
-    // - Đặt cờ _running = false, _disposed = true.
-    // - Gọi Shutdown(Both) và Close() trên socket.
-    // - Được gọi khi client disconnect hoặc server dừng.
+
     public void Close()
     {
         if (_disposed) return;
